@@ -33,7 +33,7 @@ use std::time::{Duration, Instant};
 
 pub const ID: &str = "voicechat";
 pub const NAME: &str = "Horizon Voice Chat";
-pub const VERSION: &str = "1.2.0";
+pub const VERSION: &str = "1.3.0";
 pub const DESCRIPTION: &str = "Talk with players who use the Simple Voice Chat mod, on servers that have it (unofficial). \
 V opens its screens: settings, groups and each player's volume. Push to talk (Caps Lock) or voice activation, with noise suppression when rnnoise.dll is beside libopus.";
 
@@ -270,14 +270,15 @@ impl Session {
     }
 
     /// The names of a group's members, sorted.
-    fn members(&self, group: u128) -> Vec<String> {
-        let mut names: Vec<String> = self
+    /// Group `group`'s members by name, with their ids.
+    fn members(&self, group: u128) -> Vec<(String, u128)> {
+        let mut names: Vec<(String, u128)> = self
             .states
             .values()
             .filter(|p| p.group == Some(group) && !p.disconnected)
-            .map(|p| p.name.clone())
+            .map(|p| (p.name.clone(), p.uuid))
             .collect();
-        names.sort_by_key(|n| n.to_lowercase());
+        names.sort_by_key(|(n, _)| n.to_lowercase());
         names
     }
 
@@ -318,6 +319,8 @@ struct Voice {
     device_list: Vec<String>,
     /// Players whose stored volume was looked up.
     volumes_loaded: HashSet<u128>,
+    /// The push to talk key as the settings screen names it.
+    ptt_key: String,
 }
 
 fn voice() -> MutexGuard<'static, Voice> {
@@ -337,6 +340,7 @@ fn voice() -> MutexGuard<'static, Voice> {
             menu: ui::Screens::default(),
             device_list: Vec::new(),
             volumes_loaded: HashSet::new(),
+            ptt_key: key_label(DEFAULT_PTT),
         })
     });
     VOICE.lock().unwrap_or_else(|e| e.into_inner())
@@ -702,12 +706,17 @@ impl Voice {
                 s.groups
                     .values()
                     .filter(|g| !g.hidden || s.group == Some(g.id))
-                    .map(|g| ui::GroupRow {
-                        id: g.id,
-                        name: g.name.clone(),
-                        has_password: g.has_password,
-                        members: s.members(g.id),
-                        ours: s.group == Some(g.id),
+                    .map(|g| {
+                        let (members, member_ids) = s.members(g.id).into_iter().unzip();
+                        ui::GroupRow {
+                            id: g.id,
+                            name: g.name.clone(),
+                            has_password: g.has_password,
+                            members,
+                            member_ids,
+                            ours: s.group == Some(g.id),
+                            kind: g.kind,
+                        }
                     })
                     .collect()
             })
@@ -730,6 +739,32 @@ impl Voice {
             })
             .unwrap_or_default();
         players.sort_by_key(|p| p.name.to_lowercase());
+        let now = Instant::now();
+        let transmitting = self.shared.transmitting.load(Ordering::Relaxed);
+        let talking = self.shared.talking.lock().unwrap();
+        let mut members: Vec<ui::MemberRow> = session
+            .and_then(|s| Some((s, s.group?)))
+            .map(|(s, g)| {
+                s.states
+                    .values()
+                    .filter(|p| p.group == Some(g) && !p.disconnected)
+                    .map(|p| {
+                        let own = Some(p.uuid) == own;
+                        let heard = talking.get(&p.uuid).is_some_and(|(at, _)| now - *at < TALKING);
+                        ui::MemberRow {
+                            id: p.uuid,
+                            name: p.name.clone(),
+                            talking: heard || (own && transmitting),
+                            disabled: if own { self.settings.disabled } else { p.disabled },
+                            own,
+                            volume: (volumes.get(&p.uuid).copied().unwrap_or(1.0) * 100.0).round() as u32,
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        drop(talking);
+        members.sort_by_key(|m| m.name.to_lowercase());
         ui::View {
             status: self.status_line(),
             settings: self.settings.clone(),
@@ -737,10 +772,12 @@ impl Voice {
             connected,
             groups_enabled: session.and_then(|s| s.secret.as_ref()).is_some_and(|s| s.groups),
             groups,
+            members,
             players,
             devices: self.device_list.clone(),
             denoise: denoise::available(),
             protocol: self.settings.protocol_name().into(),
+            ptt_key: self.ptt_key.clone(),
         }
     }
 
@@ -803,8 +840,7 @@ impl Voice {
             A::Join(id) => match group_name(self, id) {
                 Some((_, true)) => {
                     self.menu.joining = Some(id);
-                    self.menu.join_password.clear();
-                    self.menu.focus = Some(ui::Field::JoinPassword);
+                    self.menu.push(Screen::Password);
                 }
                 Some((name, false)) => {
                     self.send(proto::join_group(id, None));
@@ -813,17 +849,17 @@ impl Voice {
                 None => {}
             },
             A::JoinWithPassword => {
-                let Some(id) = self.menu.joining.take() else { return };
-                let password = std::mem::take(&mut self.menu.join_password);
-                self.menu.focus = None;
-                if password.is_empty() {
-                    self.menu.say("Type the group's password first", true);
-                    self.menu.joining = Some(id);
-                    self.menu.focus = Some(ui::Field::JoinPassword);
+                let Some(id) = self.menu.joining else { return };
+                if self.menu.join_password.is_empty() {
                     return;
                 }
+                let password = std::mem::take(&mut self.menu.join_password);
                 let name = group_name(self, id).map(|(n, _)| n).unwrap_or_default();
                 self.send(proto::join_group(id, Some(&password)));
+                // Back to the groups, which turn into the group once joined.
+                if self.menu.top() == Some(&Screen::Password) {
+                    self.menu.pop();
+                }
                 self.menu.say(format!("Joining {name}..."), false);
             }
             A::Leave => {
@@ -854,6 +890,15 @@ impl Voice {
             }
             _ => {}
         }
+    }
+}
+
+/// The push to talk key (`key.keyboard.caps.lock`), for the settings screen.
+pub fn menu_ptt_key(key: &str) {
+    let label = key_label(key);
+    let mut v = voice();
+    if v.ptt_key != label {
+        v.ptt_key = label;
     }
 }
 
@@ -1051,16 +1096,22 @@ pub fn hud(size: [f32; 2], measure: &dyn Fn(&str) -> f32) -> Hud {
         let now = Instant::now();
         let talking = v.shared.talking.lock().unwrap();
         let own = session.secret.as_ref().map(|s| s.player);
-        let mut members: Vec<(String, bool)> = session
+        let mut members: Vec<hud::Member> = session
             .states
             .values()
             .filter(|p| p.group == Some(g) && !p.disconnected)
             .map(|p| {
+                let mine = Some(p.uuid) == own;
                 let heard = talking.get(&p.uuid).is_some_and(|(at, _)| now - *at < TALKING);
-                (p.name.clone(), heard || (Some(p.uuid) == own && transmitting))
+                hud::Member {
+                    id: p.uuid,
+                    name: p.name.clone(),
+                    talking: heard || (mine && transmitting),
+                    disabled: if mine { v.settings.disabled } else { p.disabled },
+                }
             })
             .collect();
-        members.sort_by_key(|(n, _)| n.to_lowercase());
+        members.sort_by_key(|m| m.name.to_lowercase());
         out.group_size = hud::group_list_size(&members, measure);
         out.group = hud::group_list(&members, size, measure);
     }
@@ -1093,29 +1144,38 @@ fn shown_group(session: &Session, id: u128) -> Option<(String, bool)> {
     Some((g.name.clone(), session.group == Some(group)))
 }
 
-/// The speakers over the heads of the players talking now, as the camera
-/// sees them.
-pub fn talk_icons(camera: &labels::Camera, size: [f32; 2]) -> Vec<ui::Draw> {
+/// The icons right of the other players' name tags, as Simple Voice Chat
+/// draws them (`RenderEvents`): whispering, talking, disconnected, in
+/// another group, voice chat off, muted, in that order; nothing for a
+/// player without voice chat state. `measure` is the name's width.
+pub fn talk_icons(camera: &labels::Camera, size: [f32; 2], measure: &dyn Fn(&str) -> f32) -> Vec<ui::Draw> {
     let v = voice();
     let Some(session) = v.session.as_ref().filter(|s| !v.settings.hide_icons && s.secret.is_some()) else {
         return Vec::new();
     };
     let now = Instant::now();
+    let own = session.secret.as_ref().map(|s| s.player);
     let players = v.shared.players.lock().unwrap();
-    let talking: Vec<([f64; 3], bool, bool)> = v
-        .shared
-        .talking
-        .lock()
-        .unwrap()
+    let talking = v.shared.talking.lock().unwrap();
+    let shown: Vec<labels::NameIcon> = players
         .iter()
-        .filter(|(_, (at, _))| now - *at < TALKING)
-        .filter_map(|(id, (_, whisper))| {
-            let eye = players.get(id)?;
-            let labelled = v.settings.group_labels && shown_group(session, *id).is_some();
-            Some((*eye, labelled, *whisper))
+        .filter(|(id, _)| Some(**id) != own)
+        .filter_map(|(id, eye)| {
+            let state = session.states.get(id)?;
+            let heard = talking.get(id).filter(|(at, _)| now - *at < TALKING);
+            let icon = match heard {
+                Some((_, true)) => skin::Icon::Whisper,
+                Some(_) => skin::Icon::Speaker,
+                None if state.disconnected => skin::Icon::Disconnected,
+                None if state.group.is_some() && state.group != session.group => skin::Icon::Group,
+                None if state.disabled => skin::Icon::SpeakerOff,
+                None if state.muted => skin::Icon::MicOff,
+                None => return None,
+            };
+            Some(labels::NameIcon { eye: *eye, name_width: measure(&state.name), icon })
         })
         .collect();
-    labels::talk_icons(camera, size, &talking)
+    labels::name_icons(camera, size, &shown)
 }
 
 /// `key.keyboard.caps.lock` → `Caps Lock`.
@@ -1233,7 +1293,7 @@ pub fn command(line: &str) -> Option<Vec<String>> {
             let lines: Vec<String> = groups
                 .into_iter()
                 .map(|g| {
-                    let members = s.members(g.id);
+                    let members: Vec<String> = s.members(g.id).into_iter().map(|(n, _)| n).collect();
                     format!(
                         "{}{}{}: {}",
                         g.name,
@@ -1392,14 +1452,25 @@ mod tests {
         let shown = group_labels(&camera, [400.0, 200.0]);
         let texts: Vec<_> = shown.iter().map(|l| (l.text.as_str(), l.rgb)).collect();
         assert_eq!(texts, vec![("[Miners]", 0xFFFF55), ("[Builders]", 0x55FF55)]);
+        // By the name tags: a group icon for Bea (another group), nothing for
+        // Alex (ours, quiet); a speaker while Bea talks.
+        let tw = |t: &str| t.len() as f32 * 6.0;
+        let icons = |d: Vec<ui::Draw>| -> Vec<String> {
+            d.into_iter().filter_map(|d| if let ui::Draw::Sprite { name, .. } = d { Some(name) } else { None }).collect()
+        };
+        assert_eq!(icons(talk_icons(&camera, [400.0, 200.0], &tw)), vec![skin::Icon::Group.sprite()]);
+        voice().shared.talking.lock().unwrap().insert(0xB, (Instant::now(), false));
+        assert_eq!(icons(talk_icons(&camera, [400.0, 200.0], &tw)), vec![skin::Icon::Speaker.sprite()]);
+        voice().shared.talking.lock().unwrap().clear();
         let list = command("vc groups").unwrap();
         assert_eq!(list, vec!["Builders (yours): Alex, Me", "Miners: Bea"]);
         let measure = |t: &str| t.len() as f32 * 6.0;
         let h = hud([480.0, 270.0], &measure);
-        assert_eq!(screens::testing::texts(&h.group), vec!["Alex", "Me"]);
+        let names: Vec<String> = screens::testing::texts(&h.group).into_iter().filter(|t| t.len() > 1).collect();
+        assert_eq!(names, vec!["Alex", "Me"]);
         assert!(h.group_size[0] > 0.0);
 
-        // The menu: a password group asks for its password, then joins.
+        // The menu: in a group, Group shows its members.
         {
             let mut v = voice();
             let s = v.session.as_mut().unwrap();
@@ -1412,18 +1483,29 @@ mod tests {
         menu_click([group[0] + 1.0, group[1] + 1.0]);
         let draws = menu_draw([480.0, 270.0], [0.0, 0.0], &measure);
         let has = |d: &[ui::Draw], want: &str| d.iter().any(|d| matches!(d, ui::Draw::Text(t, ..) if t == want));
-        assert!(has(&draws, "Group: Builders") && has(&draws, "Miners") && has(&draws, "(2)"), "{:?}", screens::testing::texts(&draws));
+        assert!(has(&draws, "Group: Builders") && has(&draws, "Alex") && has(&draws, "Me"), "{:?}", screens::testing::texts(&draws));
+        assert!(voice().menu.hit_rect(&ui::Action::Leave).is_some());
+        // Out of it, the groups to join; a password group asks for its password.
+        voice().session.as_mut().unwrap().group = None;
+        let draws = menu_draw([480.0, 270.0], [0.0, 0.0], &measure);
+        assert!(has(&draws, "Join/Create Group") && has(&draws, "Miners"), "{:?}", screens::testing::texts(&draws));
         let join = voice().menu.hit_rect(&ui::Action::Join(0x62)).unwrap();
         tick(Some(world("groups.example.net")), &none);
         menu_click([join[0] + 1.0, join[1] + 1.0]);
-        assert_eq!(voice().menu.joining, Some(0x62));
+        {
+            let v = voice();
+            assert_eq!((v.menu.top().copied(), v.menu.joining), (Some(Screen::Password), Some(0x62)));
+        }
         menu_char('v');
         for c in "hunter2".chars() {
             menu_char(c);
         }
+        let draws = menu_draw([480.0, 270.0], [0.0, 0.0], &measure);
+        assert!(has(&draws, "Enter Password: Miners") && has(&draws, "*******_"), "{:?}", screens::testing::texts(&draws));
         menu_key("key.keyboard.enter", false, DEFAULT_MENU);
         let t = tick(Some(world("groups.example.net")), &none);
         assert_eq!(t.payloads, vec![proto::join_group(0x62, Some("hunter2"))].into_iter().map(|(c, d)| (c.to_owned(), d)).collect::<Vec<_>>());
+        assert_eq!(voice().menu.top(), Some(&Screen::Group));
         menu_key(DEFAULT_MENU, false, DEFAULT_MENU);
         assert!(menu_take_close() && !menu_is_open());
 

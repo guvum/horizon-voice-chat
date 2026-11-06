@@ -10,7 +10,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / 'tools' / 'make_icons.py'
 NAMES = {'microphone', 'microphone_off', 'speaker', 'speaker_off', 'whisper', 'disconnected', 'group',
-         'settings', 'lock'}
+         'settings', 'lock', 'volumes', 'eye', 'eye_off', 'leave', 'group_hud', 'group_hud_off', 'check',
+         'search'}
 
 
 def run(out: Path, rust: Path):

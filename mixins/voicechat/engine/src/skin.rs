@@ -236,6 +236,40 @@ pub fn inset(rect: [f32; 4]) -> Vec<Draw> {
 /// The title colour on a panel.
 pub const TITLE: u32 = 0x40_4040;
 
+/// A list entry's background (Simple Voice Chat's `BG_FILL`), hovered, and
+/// chosen.
+pub const ENTRY: u32 = 0xFF4A_4A4A;
+pub const ENTRY_HOVER: u32 = 0xFF5A_5A5A;
+pub const ENTRY_CHOSEN: u32 = 0xFF28_2828;
+
+/// Where a player's face goes: the game gives mods no skins to draw, so a
+/// square in a colour of their own with their name's first letter.
+pub fn head(rect: [f32; 4], name: &str, id: u128, text_width: &dyn Fn(&str) -> f32) -> Vec<Draw> {
+    const COLOURS: [u32; 8] =
+        [0xFF8E_5A3C, 0xFF3C_6E8E, 0xFF5A_8E3C, 0xFF8E_3C6E, 0xFF6E_5A8E, 0xFF3C_8E7A, 0xFF8E_7A3C, 0xFF7A_3C3C];
+    let [x, y, w, h] = rect;
+    let colour = COLOURS[((id ^ (id >> 64)) % COLOURS.len() as u128) as usize];
+    let mut out = vec![Draw::Fill(rect, 0xFF20_2020), Draw::Fill([x + 1.0, y + 1.0, w - 2.0, h - 2.0], colour)];
+    if let Some(c) = name.chars().find(|c| c.is_alphanumeric()) {
+        let letter: String = c.to_uppercase().collect();
+        let lw = text_width(&letter);
+        out.push(Draw::Text(letter, [(x + (w - lw) / 2.0).round(), (y + (h - 8.0) / 2.0).round()], 0xFF_FFFF, true));
+    }
+    out
+}
+
+/// The frame around a talking player's face (`talk_outline`), `t` thick.
+pub fn talk_outline(rect: [f32; 4], t: f32) -> Vec<Draw> {
+    let [x, y, w, h] = rect;
+    let c = 0xFF55_FF55;
+    vec![
+        Draw::Fill([x, y, w, t], c),
+        Draw::Fill([x, y + h - t, w, t], c),
+        Draw::Fill([x, y + t, t, h - 2.0 * t], c),
+        Draw::Fill([x + w - t, y + t, t, h - 2.0 * t], c),
+    ]
+}
+
 /// The mod's own icons, 16×16, drawn by this project (MIT): `make_icons.py`
 /// writes them as PNGs from the same pixels as [`icons`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -249,10 +283,18 @@ pub enum Icon {
     Group,
     Settings,
     Lock,
+    Volumes,
+    Eye,
+    EyeOff,
+    Leave,
+    GroupHud,
+    GroupHudOff,
+    Check,
+    Search,
 }
 
 impl Icon {
-    pub const ALL: [Icon; 9] = [
+    pub const ALL: [Icon; 17] = [
         Icon::Mic,
         Icon::MicOff,
         Icon::Speaker,
@@ -262,6 +304,14 @@ impl Icon {
         Icon::Group,
         Icon::Settings,
         Icon::Lock,
+        Icon::Volumes,
+        Icon::Eye,
+        Icon::EyeOff,
+        Icon::Leave,
+        Icon::GroupHud,
+        Icon::GroupHudOff,
+        Icon::Check,
+        Icon::Search,
     ];
 
     /// The PNG's file name, without `.png`.
@@ -276,6 +326,14 @@ impl Icon {
             Icon::Group => "group",
             Icon::Settings => "settings",
             Icon::Lock => "lock",
+            Icon::Volumes => "volumes",
+            Icon::Eye => "eye",
+            Icon::EyeOff => "eye_off",
+            Icon::Leave => "leave",
+            Icon::GroupHud => "group_hud",
+            Icon::GroupHudOff => "group_hud_off",
+            Icon::Check => "check",
+            Icon::Search => "search",
         }
     }
 
@@ -291,6 +349,14 @@ impl Icon {
             Icon::Group => "voicechat:gui/icons/group",
             Icon::Settings => "voicechat:gui/icons/settings",
             Icon::Lock => "voicechat:gui/icons/lock",
+            Icon::Volumes => "voicechat:gui/icons/volumes",
+            Icon::Eye => "voicechat:gui/icons/eye",
+            Icon::EyeOff => "voicechat:gui/icons/eye_off",
+            Icon::Leave => "voicechat:gui/icons/leave",
+            Icon::GroupHud => "voicechat:gui/icons/group_hud",
+            Icon::GroupHudOff => "voicechat:gui/icons/group_hud_off",
+            Icon::Check => "voicechat:gui/icons/check",
+            Icon::Search => "voicechat:gui/icons/search",
         }
     }
 

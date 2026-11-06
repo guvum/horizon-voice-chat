@@ -1,7 +1,8 @@
-// The HUD: the voice chat's icon in the bottom left corner (microphone,
-// muted, off, disconnected, whispering) with what doesn't work above it,
-// the group's members in the top left corner, and above players' heads
-// their group and a speaker while they talk, seen from the camera the
+// The HUD: the voice chat's icon near the bottom left corner where Simple
+// Voice Chat puts it (microphone, muted, off, disconnected, whispering) with
+// what doesn't work above it, the group's members in the top left corner,
+// each player's group above their head and the voice chat icon right of
+// their name tag (talking, whispering, off...), seen from the camera the
 // world was drawn from.
 fn voicechat_hud(
     game: &mut crate::game::Game<'_>,
@@ -24,7 +25,7 @@ fn voicechat_hud(
             draws.push(vc::ui::Draw::Fill([x, y, w, 12.0], 0x6000_0000));
             draws.push(vc::ui::Draw::Text(label.text, [x + 2.0, y + 2.0], label.rgb, true));
         }
-        draws.extend(vc::talk_icons(&camera, size));
+        draws.extend(vc::talk_icons(&camera, size, &|t: &str| game.native_text_width(t)));
     }
     let measure = |t: &str| game.native_text_width(t);
     let hud = vc::hud(size, &measure);

@@ -1,6 +1,6 @@
 id = "voicechat"
 name = "Horizon Voice Chat"
-version = "1.2.0"
+version = "1.3.0"
 description = "Talk with players who use the Simple Voice Chat mod, on servers that have it (unofficial). This part holds the mod's icons; its code is the native mod of the same id."
 authors = ["Nirokx", "BnCatt"]
 api = "0.2"

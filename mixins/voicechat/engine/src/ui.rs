@@ -54,7 +54,6 @@ pub enum Action {
     Device(DeviceKind, Option<String>),
     Join(u128),
     JoinWithPassword,
-    CancelJoin,
     Leave,
     Focus(Field),
     Kind,
@@ -70,6 +69,8 @@ pub enum Field {
     Name,
     Password,
     JoinPassword,
+    /// Adjust Volumes' search box.
+    Search,
 }
 
 /// A group as the screens list it.
@@ -79,7 +80,25 @@ pub struct GroupRow {
     pub name: String,
     pub has_password: bool,
     pub members: Vec<String>,
+    /// The members' ids, in the same order (for their faces).
+    pub member_ids: Vec<u128>,
     pub ours: bool,
+    /// 0 normal, 1 open, 2 isolated.
+    pub kind: i16,
+}
+
+/// A member of the player's own group, for the group screen.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MemberRow {
+    pub id: u128,
+    pub name: String,
+    pub talking: bool,
+    /// Voice chat turned off.
+    pub disabled: bool,
+    /// The player themself (no volume slider).
+    pub own: bool,
+    /// 0 to 400.
+    pub volume: u32,
 }
 
 /// Another player with voice chat, for the volumes screen.
@@ -100,6 +119,8 @@ pub struct View {
     pub connected: bool,
     pub groups_enabled: bool,
     pub groups: Vec<GroupRow>,
+    /// The player's own group's members, by name.
+    pub members: Vec<MemberRow>,
     pub players: Vec<PlayerRow>,
     /// The devices of the kind the device screen lists (names).
     pub devices: Vec<String>,
@@ -107,6 +128,8 @@ pub struct View {
     pub denoise: Result<(), String>,
     /// The protocol setting, named.
     pub protocol: String,
+    /// The push to talk key, named (`Caps Lock`).
+    pub ptt_key: String,
 }
 
 impl Default for View {
@@ -118,10 +141,12 @@ impl Default for View {
             connected: false,
             groups_enabled: false,
             groups: Vec::new(),
+            members: Vec::new(),
             players: Vec::new(),
             devices: Vec::new(),
             denoise: Ok(()),
             protocol: "Automatic".into(),
+            ptt_key: "Caps Lock".into(),
         }
     }
 }
@@ -150,6 +175,8 @@ pub struct Screens {
     /// The password group being joined, and what is typed for it.
     pub joining: Option<u128>,
     pub join_password: String,
+    /// What Adjust Volumes' search box holds.
+    pub search: String,
     pub message: Option<(String, u32)>,
     /// The first row a list shows.
     pub scroll: usize,
@@ -182,10 +209,17 @@ impl Screens {
     }
 
     pub fn push(&mut self, screen: Screen) {
+        // The password screen is for the group being joined.
+        let joining = if screen == Screen::Password { self.joining } else { None };
         self.unfocus();
         self.scroll = 0;
         self.message = None;
+        self.search.clear();
         self.stack.push(screen);
+        if joining.is_some() {
+            self.joining = joining;
+            self.focus = Some(Field::JoinPassword);
+        }
     }
 
     /// Back to the screen before; closing when there is none.
@@ -193,6 +227,7 @@ impl Screens {
         self.unfocus();
         self.scroll = 0;
         self.drag = None;
+        self.search.clear();
         self.stack.pop();
         if self.stack.is_empty() {
             self.close();
@@ -281,6 +316,7 @@ impl Screens {
             Field::Name => &mut self.name,
             Field::Password => &mut self.password,
             Field::JoinPassword => &mut self.join_password,
+            Field::Search => &mut self.search,
         }
     }
 
@@ -291,10 +327,14 @@ impl Screens {
             return;
         }
         let Some(f) = self.focus else { return };
-        let max = if f == Field::Name { NAME_MAX } else { PASSWORD_MAX };
+        let max = if matches!(f, Field::Name | Field::Search) { NAME_MAX } else { PASSWORD_MAX };
+        let spaces = matches!(f, Field::Name | Field::Search);
         let field = self.field_mut(f);
-        if !c.is_control() && field.chars().count() < max && !(f != Field::Name && c == ' ') {
+        if !c.is_control() && field.chars().count() < max && (spaces || c != ' ') {
             field.push(c);
+            if f == Field::Search {
+                self.scroll = 0;
+            }
         }
     }
 
@@ -303,8 +343,10 @@ impl Screens {
         self.skip_char = None;
         match key {
             "key.keyboard.escape" => {
-                if self.joining.is_some() {
-                    return Some(Action::CancelJoin);
+                // The password screen goes back at once, as vanilla's screens
+                // do with a field focused.
+                if self.joining.is_some() || self.top() == Some(&Screen::Password) {
+                    return Some(Action::Back);
                 }
                 if self.focus.is_some() {
                     self.focus = None;
@@ -318,19 +360,17 @@ impl Screens {
                 }
             }
             "key.keyboard.tab" => {
-                self.focus = match (self.focus, shift) {
-                    (Some(Field::JoinPassword), _) => Some(Field::JoinPassword),
-                    (Some(Field::Name), false) | (Some(Field::Password), true) => Some(Field::Password),
+                self.focus = match (self.top(), self.focus, shift) {
+                    (Some(Screen::Password), ..) => Some(Field::JoinPassword),
+                    (Some(Screen::Volumes), ..) => Some(Field::Search),
+                    (_, Some(Field::Name), false) | (_, Some(Field::Password), true) => Some(Field::Password),
                     _ => Some(Field::Name),
                 };
-                if self.joining.is_some() {
-                    self.focus = Some(Field::JoinPassword);
-                }
             }
             "key.keyboard.enter" | "key.keyboard.keypad.enter" => match self.focus {
                 Some(Field::JoinPassword) => return Some(Action::JoinWithPassword),
-                Some(_) => return Some(Action::Create),
-                None => {}
+                Some(Field::Name | Field::Password) => return Some(Action::Create),
+                Some(Field::Search) | None => {}
             },
             "key.keyboard.up" => self.scroll = self.scroll.saturating_sub(1),
             "key.keyboard.down" => self.scroll += 1,
@@ -356,11 +396,6 @@ impl Screens {
             Action::Focus(f) => self.focus = Some(f),
             Action::Kind => self.kind = (self.kind + 1) % 3,
             Action::Scroll(d) => self.scroll_by(-d),
-            Action::CancelJoin => {
-                self.joining = None;
-                self.join_password.clear();
-                self.focus = None;
-            }
             Action::Open(screen) => self.push(screen),
             Action::Back => self.pop(),
             Action::Close => self.close(),
@@ -405,6 +440,40 @@ mod tests {
         // Escape leaves the field, then goes back a screen, then closes.
         assert_eq!(m.key("key.keyboard.escape", false), None);
         assert_eq!(m.key("key.keyboard.escape", false), Some(Action::Back));
+    }
+
+    #[test]
+    fn the_password_screen_types_into_its_field_and_escape_leaves_it() {
+        let mut m = Screens::default();
+        m.open(None);
+        m.act(Action::Open(Screen::Group));
+        m.joining = Some(7);
+        m.act(Action::Open(Screen::Password));
+        assert_eq!((m.joining, m.focus), (Some(7), Some(Field::JoinPassword)));
+        for c in "a b".chars() {
+            m.char_typed(c);
+        }
+        assert_eq!(m.join_password, "ab");
+        assert_eq!(m.key("key.keyboard.enter", false), Some(Action::JoinWithPassword));
+        let back = m.key("key.keyboard.escape", false).unwrap();
+        m.act(back);
+        assert_eq!((m.top(), m.joining, m.join_password.as_str()), (Some(&Screen::Group), None, ""));
+    }
+
+    #[test]
+    fn the_search_box_takes_spaces_and_goes_back_to_the_top() {
+        let mut m = Screens::default();
+        m.open(None);
+        m.act(Action::Open(Screen::Volumes));
+        m.scroll = 3;
+        m.act(Action::Focus(Field::Search));
+        for c in "al x".chars() {
+            m.char_typed(c);
+        }
+        assert_eq!((m.search.as_str(), m.scroll), ("al x", 0));
+        assert_eq!(m.key("key.keyboard.enter", false), None);
+        m.act(Action::Back);
+        assert!(m.search.is_empty());
     }
 
     #[test]

@@ -14,27 +14,34 @@ the [Simple Voice Chat](https://github.com/henkelmax/simple-voice-chat) protocol
 protocol as the Java mod, so on any server with the voice chat mod or plugin you can talk with players
 who play on the regular Java launcher with Simple Voice Chat.
 
-It looks like the Java mod: vanilla buttons, sliders and text fields (drawn from the game's own GUI
-sprites, so a resource pack restyles them), the mod's own icons, an icon in the bottom left corner and a
-speaker over the head of whoever is talking.
+It looks like the Java mod: its screens at the same sizes and positions, vanilla buttons, sliders and text
+fields (drawn from the game's own GUI sprites, so a resource pack restyles them), the mod's own icons, the
+status icon where the Java mod puts it (16 px from the left and the bottom) and the icon right of a
+player's name tag while they talk. The game gives mods no player skins to draw, so where the Java mod
+shows faces this one shows a coloured square with the name's first letter.
 
-- **Voice Chat (V)**: four icon buttons (microphone on/muted, voice chat on/off, groups, settings) and
-  **Adjust Volumes**, with the connection's status under them. Escape goes back one screen, V closes.
-- **Settings**: voice volume (0-200 %), microphone amplification (0-500 %) and the voice activation
-  threshold as sliders (the threshold with a live microphone meter behind it), push to talk or voice
-  activation, **noise suppression** (rnnoise), the microphone and the speakers by name (or the
-  system's default), hide icons, the group list on screen, group names above players, the protocol.
-- **Groups**: the server's groups, a lock on those with a password and the member count (the members
-  in a tooltip); **Join** (a password group asks for its password in the row), **Leave** for yours, and
-  **Create Group...** (name, optional password, type). The wheel scrolls; long names are cut with "…".
-- **Adjust Volumes**: a slider for each other player with voice chat, 0-400 %, kept per player.
+- **Voice Chat (V)**: Settings and Group, and icon buttons for the microphone (on/muted), voice chat
+  (on/off), Adjust Volumes and hiding the icons; while voice chat isn't connected, why. Escape goes back
+  one screen, V closes.
+- **Settings**: voice volume (0-200 %), microphone amplification (0-500 %), **noise suppression**
+  (rnnoise), push to talk or voice activation, the push to talk key, the voice activation threshold
+  (with a live microphone meter behind it), group names above players, the protocol, and Select
+  Microphone / Select Speaker (by name, or the system's default).
+- **Group**: out of a group, the server's groups (a lock on those with a password, the members' faces,
+  their names in a tooltip): a click joins, a password group asks for its password on its own screen,
+  and **Create Group** (name, optional password, type). In a group, its members (a frame around whoever
+  talks, a volume slider on the hovered one) with buttons for the microphone, voice chat, the group list
+  on screen and leaving. The wheel scrolls; long names are cut with "…".
+- **Adjust Volumes**: a Players tab, a search box and a slider for each other player with voice chat,
+  0-400 %, kept per player.
 - **Talking**: hold **Caps Lock** (push to talk), or switch to voice activation. Voices come from where
   the players stand: they get quieter with distance and pan left or right, as the Java mod's do.
 - **Keys** (Options > Mods > Horizon Voice Chat): voice chat (V), push to talk (Caps Lock), whisper (not
   bound), mute the microphone (J), voice chat off/on (K).
-- **On screen**: the status icon (bottom left: microphone, muted, off, disconnected, whispering), what
-  doesn't work above it in red, your group's members (top left, a speaker by whoever is talking), each
-  player's group above their head (`[Builders]`; yours in green) and a speaker above it while they talk.
+- **On screen**: the status icon (bottom left: disconnected, off, muted, whispering, microphone), what
+  doesn't work above it in red, your group's members (top left, framed while they talk), each player's
+  group above their head (`[Builders]`; yours in green) and right of their name tag the Java mod's icon
+  for them (talking, whispering, disconnected, in another group, voice chat off, muted).
   `/vc groups` lists every group with its members; `/vc join <group> [password]`, `/vc leave` and
   `/vc create <name> [password] [normal|open|isolated]` work too, and so does the server's `/voicechat`.
 - **`/vc`**: `status`, `mute`/`unmute`, `off`/`on`, `mode ptt|voice`, `volume <0-200>`,
@@ -78,13 +85,13 @@ Uses the Horizon launcher's own Rust and Horizon source (nothing else to install
 L=~/.local/share/horizon-launcher
 export PATH=$L/rust/1.99.1-x86_64-unknown-linux-gnu/bin:$PATH CARGO_HOME=$L/cargo
 (cd mixins/voicechat/engine && cargo test --offline && rm -f Cargo.lock)   # the engine's tests
-python3 tools/package.py --install        # target/voicechat-1.2.0.hnmod (+ .hmod), the .hnmod copied into the launcher's native mods
+python3 tools/package.py --install        # target/voicechat-1.3.0.hnmod (+ .hmod), the .hnmod copied into the launcher's native mods
 python3 -m unittest tools/test_make_icons.py
 ```
 
-`package.py` makes two files. `voicechat-1.2.0.hnmod` is the native mod alone, the file the launcher reads
+`package.py` makes two files. `voicechat-1.3.0.hnmod` is the native mod alone, the file the launcher reads
 from `horizon-native-mods/` today; it draws the icons from pixels compiled into the mod
-(`engine/src/icons.rs`). `voicechat-1.2.0.hmod` is the same mod with `horizon-mod.toml` and `assets/`
+(`engine/src/icons.rs`). `voicechat-1.3.0.hmod` is the same mod with `horizon-mod.toml` and `assets/`
 (the icons as GUI textures, `voicechat:gui/icons/<name>`), the combined form for launchers that load it;
 the mod then draws those textures, which a resource pack can replace. The icons come from
 `tools/make_icons.py` (16×16 pixel grids, the mod's own drawings), which writes both the PNGs and
@@ -122,7 +129,7 @@ the microphone, and the log (`logs/latest.log`, lines `Voice Chat: …`) counts 
   - `denoise.rs`: rnnoise, loaded at run time; `dylib.rs`: finding the C libraries
   - `screens/`: each screen's layout; `ui.rs`: the screen stack, clicks, drags and typing;
     `skin.rs`: vanilla's nine-slice widgets; `icons.rs`: the icons' pixels; `text.rs`: every label
-  - `hud.rs`: the status icon and group list; `labels.rs`: group names and speakers above players;
+  - `hud.rs`: the status icon and group list; `labels.rs`: group names above players and the icons by their name tags;
     `lib.rs`: the session, keys, `/vc` and settings
 - `mixins/voicechat/*.rs`: one small hook adapter per hook point
 - `mixins/voicechat/horizon-mixin.toml`: where each hook goes
@@ -148,8 +155,13 @@ the microphone, and the log (`logs/latest.log`, lines `Voice Chat: …`) counts 
 - 1.2.0: the engine's 50 unit tests (each screen's layout at several GUI sizes, sliders dragged and
   stored, the group screens, device choice, the HUD, nine-slice sprites, rnnoise turning hiss down by
   over 70 dB while keeping a tone, Opus) pass on Windows with the built DLLs; the changed hook adapters
-  type-check against stand-ins with `f319701`'s signatures (not a full game build). The screens have not been seen in the real game yet.
-- Not tested yet: the screens in the real game in the real game, 2.7 servers live (no 2.7 plugin build is published), a real microphone and speakers
+  type-check against stand-ins with `f319701`'s signatures (not a full game build). A player then tried the screens in the real game.
+- 1.3.0: the screens moved to the Java mod's sizes and positions, the status icon to its place and the
+  talking icon to the right of the name tag; the engine's 57 unit tests check those numbers (each screen
+  at several GUI sizes, the list screens' entries, the icon by a name tag as the projection shrinks it),
+  and the hook adapters type-check against `f319701`'s signatures (not a full game build). 1.2.0's
+  screens were tried in the real game by a player; 1.3.0's are not yet.
+- Not tested yet: 1.3.0 in the real game, 2.7 servers live (no 2.7 plugin build is published), a real microphone and speakers
   in the game, and talking with the Java mod itself.
 
 ## License

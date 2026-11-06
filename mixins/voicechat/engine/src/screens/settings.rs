@@ -1,11 +1,17 @@
-// The settings screen, laid out as vanilla's option screens (two columns of
-// 150 wide widgets, Done at the bottom) with Simple Voice Chat's settings:
-// volume, amplification, the activation threshold with a live level meter,
-// activation type, noise suppression, the devices and what shows on screen.
+// The settings screen, laid out as Simple Voice Chat's
+// `VoiceChatSettingsScreen` (248×219, one column of 228 wide widgets 21 px
+// apart): volume, amplification, noise suppression, the activation type
+// with the microphone test beside it, the push to talk key, the activation
+// threshold with a live level meter, group names and protocol (where the Java
+// mod has its audio type), and the two device lists.
 use super::{DeviceKind, Screen, Ui};
 use crate::net::Mode;
+use crate::skin::Icon;
 use crate::text;
 use crate::ui::{Action, Draw, Slider, View};
+
+pub const WIDTH: f32 = 248.0;
+pub const HEIGHT: f32 = 219.0;
 
 pub const VOLUME_MAX: f32 = 200.0;
 pub const GAIN_MAX: f32 = 500.0;
@@ -42,23 +48,15 @@ pub fn level_meter(rect: [f32; 4], level_db: f32, threshold_db: i32) -> Vec<Draw
 
 pub fn layout(ui: &mut Ui<'_>, view: &View) {
     let s = &view.settings;
-    let [sw, sh] = ui.size;
-    ui.centred(text::SETTINGS, sw / 2.0, 15.0, 0xFF_FFFF, true);
-    let total = (sw - 10.0).min(310.0).floor();
-    let col = ((total - 10.0) / 2.0).floor();
-    let x0 = ((sw - total) / 2.0).floor();
-    let x1 = x0 + col + 10.0;
-    let top = 36.0;
-    let row = |i: f32| top + i * 24.0;
+    let [px, py, _, _] = ui.panel(WIDTH, HEIGHT, text::SETTINGS);
+    let (x, w) = (px + 10.0, WIDTH - 20.0);
+    let row = |i: f32| py + 20.0 + i * 21.0;
+    let half = ((WIDTH - 20.0) / 2.0).floor() - 1.0;
+    let right = px + (WIDTH / 2.0).floor() + 1.0;
 
-    ui.slider([x0, row(0.0), col, 20.0], volume_value(s.volume), &text::volume(s.volume), Slider::Volume, Vec::new());
-    ui.slider([x1, row(0.0), col, 20.0], gain_value(s.mic_gain), &text::amplification(s.mic_gain), Slider::Gain, Vec::new());
-    let wide = [x0, row(1.0), x1 + col - x0, 20.0];
-    let meter = level_meter(wide, view.level_db, s.threshold);
-    ui.slider(wide, threshold_value(s.threshold), &text::threshold(s.threshold), Slider::Threshold, meter);
-
-    ui.button([x0, row(2.0), col, 20.0], &text::activation(s.mode == Mode::Voice), Some(Action::Mode));
-    let denoise = [x1, row(2.0), col, 20.0];
+    ui.slider([x, row(0.0), w, 20.0], volume_value(s.volume), &text::volume(s.volume), Slider::Volume, Vec::new());
+    ui.slider([x, row(1.0), w, 20.0], gain_value(s.mic_gain), &text::amplification(s.mic_gain), Slider::Gain, Vec::new());
+    let denoise = [x, row(2.0), w, 20.0];
     match &view.denoise {
         Ok(()) => ui.button(denoise, &text::denoiser(s.denoise), Some(Action::Denoise)),
         Err(why) => {
@@ -67,24 +65,24 @@ pub fn layout(ui: &mut Ui<'_>, view: &View) {
         }
     }
 
-    let mic = [x0, row(3.0), col, 20.0];
-    ui.button(mic, &text::microphone(s.mic_device.as_deref()), Some(Action::Open(Screen::Devices(DeviceKind::Input))));
-    if let Some(name) = &s.mic_device {
-        ui.tip(mic, vec![name.clone()]);
-    }
-    let speaker = [x1, row(3.0), col, 20.0];
-    ui.button(speaker, &text::speaker(s.speaker_device.as_deref()), Some(Action::Open(Screen::Devices(DeviceKind::Output))));
-    if let Some(name) = &s.speaker_device {
-        ui.tip(speaker, vec![name.clone()]);
-    }
+    ui.icon_button([x, row(3.0), 20.0, 20.0], Icon::Mic, None, text::MIC_TEST_TIP.into());
+    ui.button([x + 21.0, row(3.0), w - 21.0, 20.0], &text::activation(s.mode == Mode::Voice), Some(Action::Mode));
+    let ptt = [x, row(4.0), w, 20.0];
+    ui.button(ptt, &text::push_to_talk(&view.ptt_key), None);
+    ui.tip(ptt, vec![text::PTT_TIP.into()]);
+    let threshold = [x, row(5.0), w, 20.0];
+    let meter = level_meter(threshold, view.level_db, s.threshold);
+    ui.slider(threshold, threshold_value(s.threshold), &text::threshold(s.threshold), Slider::Threshold, meter);
 
-    ui.button([x0, row(4.0), col, 20.0], &text::hide_icons(s.hide_icons), Some(Action::HideIcons));
-    ui.button([x1, row(4.0), col, 20.0], &text::group_hud(s.hud), Some(Action::GroupHud));
-    ui.button([x0, row(5.0), col, 20.0], &text::group_names(s.group_labels), Some(Action::Labels));
-    ui.button([x1, row(5.0), col, 20.0], &text::protocol(&view.protocol), Some(Action::Protocol));
+    ui.button([x, row(6.0), half, 20.0], &text::group_names(s.group_labels), Some(Action::Labels));
+    ui.button([right, row(6.0), half, 20.0], &text::protocol(&view.protocol), Some(Action::Protocol));
 
-    let done_y = (sh - 27.0).max(row(6.0));
-    ui.back([(sw / 2.0 - 100.0).floor(), done_y, 200.0, 20.0], text::DONE);
+    let mic = [x, row(7.0), half, 20.0];
+    ui.button(mic, text::SELECT_MICROPHONE, Some(Action::Open(Screen::Devices(DeviceKind::Input))));
+    ui.tip(mic, vec![s.mic_device.clone().unwrap_or_else(|| text::DEFAULT_DEVICE.into())]);
+    let speaker = [right, row(7.0), half, 20.0];
+    ui.button(speaker, text::SELECT_SPEAKER, Some(Action::Open(Screen::Devices(DeviceKind::Output))));
+    ui.tip(speaker, vec![s.speaker_device.clone().unwrap_or_else(|| text::DEFAULT_DEVICE.into())]);
 }
 
 #[cfg(test)]
@@ -113,6 +111,26 @@ mod tests {
         let Some(Action::Slide(Slider::Threshold, v)) = m.hit([t[0] + t[2] / 2.0, t[1] + 5.0]) else { panic!() };
         assert_eq!(threshold_of(v), -63);
         assert!(on_screen(&widgets, size));
+    }
+
+    #[test]
+    fn one_column_at_simple_voice_chats_rows() {
+        let size = [427.0, 240.0];
+        let (draws, widgets) = layout(&Screen::Settings, &Screens::default(), &view(), size, [0.0, 0.0], &tw);
+        let (left, top) = (((427.0 - 248.0) / 2.0_f32).floor(), ((240.0 - 219.0) / 2.0_f32).floor());
+        let rel = |r: [f32; 4]| [r[0] - left, r[1] - top, r[2], r[3]];
+        assert_eq!(rel(slider_rect(&widgets, Slider::Volume)), [10.0, 20.0, 228.0, 20.0]);
+        assert_eq!(rel(slider_rect(&widgets, Slider::Gain)), [10.0, 41.0, 228.0, 20.0]);
+        assert_eq!(rel(widget(&widgets, &Action::Denoise).unwrap()), [10.0, 62.0, 228.0, 20.0]);
+        assert_eq!(rel(widget(&widgets, &Action::Mode).unwrap()), [31.0, 83.0, 207.0, 20.0]);
+        assert_eq!(rel(slider_rect(&widgets, Slider::Threshold)), [10.0, 125.0, 228.0, 20.0]);
+        assert_eq!(rel(widget(&widgets, &Action::Labels).unwrap()), [10.0, 146.0, 113.0, 20.0]);
+        assert_eq!(rel(widget(&widgets, &Action::Protocol).unwrap()), [125.0, 146.0, 113.0, 20.0]);
+        let mic = widget(&widgets, &Action::Open(Screen::Devices(DeviceKind::Input))).unwrap();
+        assert_eq!(rel(mic), [10.0, 167.0, 113.0, 20.0]);
+        assert!(texts(&draws).contains(&"Push To Talk: Caps Lock".to_owned()));
+        // No Done button: Escape goes back, as in the Java mod in game.
+        assert!(widget(&widgets, &Action::Back).is_none());
     }
 
     #[test]

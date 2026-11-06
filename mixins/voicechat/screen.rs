@@ -1,5 +1,5 @@
-// Draws the voice chat's screen on top (main, settings, groups, volumes,
-// devices) with vanilla's button, slider and text field sprites and the
+// Draws the voice chat's screen on top (main, settings, groups, group
+// creation and password, volumes, devices) with vanilla's button, slider and text field sprites and the
 // mod's icons; a sprite the atlas lacks gets a plain stand-in.
 fn voicechat_screen(
     game: &crate::game::Game<'_>,
@@ -10,6 +10,7 @@ fn voicechat_screen(
     if game.native_mod_screen() != Some(vc::ID) {
         return;
     }
+    vc::menu_ptt_key(&game.native_mod_key(vc::ID, vc::KEY_PTT, vc::DEFAULT_PTT));
     let measure = |t: &str| game.native_text_width(t);
     let draws = vc::menu_draw([batch.width, batch.height], screen.mouse, &measure);
     vc::render(&draws, &mut |d| match d {

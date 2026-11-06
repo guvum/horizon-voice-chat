@@ -1,7 +1,9 @@
 //! The screens' layouts, laid out each frame from the voice chat's
 //! [`View`]: vanilla buttons, sliders and text fields (`skin`), on the
-//! light grey panels a container screen has, as Simple Voice Chat's screens
-//! look. Every position comes from the GUI size, so they follow the GUI scale.
+//! light grey panels a container screen has, at Simple Voice Chat's sizes
+//! and positions (`VoiceChatScreen` 195×76, the settings 248×219, the list
+//! screens 236 wide from y 32 with 36 px entries). Every position comes from
+//! the GUI size, so they follow the GUI scale.
 mod devices;
 mod group;
 mod main;
@@ -25,8 +27,11 @@ pub enum DeviceKind {
 pub enum Screen {
     Main,
     Settings,
+    /// The groups to join, or the player's own group's members.
     Group,
     CreateGroup,
+    /// The password for the group being joined.
+    Password,
     Volumes,
     Devices(DeviceKind),
 }
@@ -47,8 +52,10 @@ pub fn layout(
     match screen {
         Screen::Main => main::layout(&mut ui, view),
         Screen::Settings => settings::layout(&mut ui, view),
+        Screen::Group if view.groups.iter().any(|g| g.ours) => group::members(&mut ui, state, view),
         Screen::Group => group::list(&mut ui, state, view),
         Screen::CreateGroup => group::create(&mut ui, state),
+        Screen::Password => group::password(&mut ui, state, view),
         Screen::Volumes => volumes::layout(&mut ui, state, view),
         Screen::Devices(kind) => devices::layout(&mut ui, state, view, *kind),
     }
@@ -193,6 +200,101 @@ impl<'a> Ui<'a> {
     pub fn back(&mut self, rect: [f32; 4], label: &str) {
         self.button(rect, label, Some(Action::Back));
     }
+
+    /// A label on a panel: dark grey, no shadow, as vanilla's.
+    pub fn label(&mut self, text: &str, at: [f32; 2]) {
+        self.text(text, at, skin::TITLE, false);
+    }
+
+    /// A player's face stand-in ([`skin::head`]).
+    pub fn head(&mut self, rect: [f32; 4], name: &str, id: u128) {
+        let d = skin::head(rect, name, id, self.text_width);
+        self.draws.extend(d);
+    }
+
+    /// A message (joining, an error) under a panel ending at `bottom`, when
+    /// there is room for it.
+    pub fn message(&mut self, state: &Screens, bottom: f32) {
+        if let Some((m, rgb)) = &state.message
+            && bottom + 14.0 <= self.size[1]
+        {
+            let m = self.fit(m, self.size[0] - 8.0);
+            self.centred(&m, (self.size[0] / 2.0).floor(), bottom + 4.0, *rgb, true);
+        }
+    }
+
+    /// The frame of a list screen as Simple Voice Chat's (`JoinGroupScreen`,
+    /// `GroupScreen`, `SelectDeviceScreen`, `AdjustVolumesScreen`): 236 wide,
+    /// from y 32, a 16 px header with the title, rows of 18 px units as many
+    /// as fit (at least `min_units`), a `footer` (32 with a button row, 8
+    /// without); `search` keeps the units' first 16 px for a search box.
+    pub fn list_frame(&mut self, title: &str, footer: f32, search: bool, min_units: f32) -> ListFrame {
+        let [sw, sh] = self.size;
+        let left = ((sw - LIST_WIDTH) / 2.0).floor() + 2.0;
+        let top = LIST_TOP;
+        let units = ((sh - HEADER - footer - top * 2.0) / UNIT).floor().max(min_units);
+        let height = HEADER + units * UNIT + footer;
+        self.draws.extend(skin::panel([left, top, LIST_WIDTH, height]));
+        let title = self.fit(title, LIST_WIDTH - 16.0);
+        self.centred(&title, left + LIST_WIDTH / 2.0, top + 5.0, skin::TITLE, false);
+        self.draws.extend(skin::inset([left + 6.0, top + HEADER, LIST_WIDTH - 12.0, units * UNIT]));
+        let skip = if search { SEARCH } else { 0.0 };
+        let area = [left + 6.0, top + HEADER + skip, LIST_WIDTH - 12.0, units * UNIT - skip];
+        let rows = (((area[3] - 4.0) / CELL).floor().max(1.0)) as usize;
+        ListFrame { left, top, height, area, rows, entry_x: (sw / 2.0).floor() - ENTRY_WIDTH / 2.0 }
+    }
+}
+
+pub const LIST_WIDTH: f32 = 236.0;
+pub const LIST_TOP: f32 = 32.0;
+const HEADER: f32 = 16.0;
+const UNIT: f32 = 18.0;
+const SEARCH: f32 = 16.0;
+/// A list entry's cell, and the entry inside it.
+pub const CELL: f32 = 36.0;
+pub const ENTRY_WIDTH: f32 = 216.0;
+pub const ENTRY_HEIGHT: f32 = 32.0;
+/// Room around what an entry holds (`PADDING`).
+pub const PADDING: f32 = 4.0;
+
+/// Where a list screen's parts are: its panel (`left`, `top`, `height`),
+/// the list's area and how many entries it shows.
+#[derive(Clone, Copy, Debug)]
+pub struct ListFrame {
+    pub left: f32,
+    pub top: f32,
+    pub height: f32,
+    pub area: [f32; 4],
+    pub rows: usize,
+    entry_x: f32,
+}
+
+impl ListFrame {
+    /// The `i`th entry shown.
+    pub fn entry(&self, i: usize) -> [f32; 4] {
+        [self.entry_x, self.area[1] + 4.0 + i as f32 * CELL, ENTRY_WIDTH, ENTRY_HEIGHT]
+    }
+
+    /// The footer's buttons' row.
+    pub fn footer_y(&self) -> f32 {
+        self.top + self.height - 27.0
+    }
+
+    pub fn bottom(&self) -> f32 {
+        self.top + self.height
+    }
+
+    /// A scrollbar right of the entries, for `shown` of `len` from `first`.
+    pub fn scrollbar(&self, ui: &mut Ui<'_>, first: usize, shown: usize, len: usize) {
+        let x = self.entry_x + ENTRY_WIDTH + 2.0;
+        scrollbar(ui, [x, self.area[1] + 4.0, 4.0, self.rows as f32 * CELL - 4.0], first, shown, len);
+    }
+
+    /// `text` in the middle of the list (an empty list's line).
+    pub fn empty(&self, ui: &mut Ui<'_>, text: &str, rgb: u32) {
+        let t = ui.fit(text, ENTRY_WIDTH);
+        ui.centred(&t, (ui.size[0] / 2.0).floor(), self.area[1] + (self.area[3] / 2.0).floor() - 4.0, rgb, true);
+    }
 }
 
 /// A list's visible window: the first row shown and how many, for `len`
@@ -230,8 +332,8 @@ pub(crate) mod testing {
             connected: true,
             groups_enabled: true,
             groups: vec![
-                GroupRow { id: 1, name: "Builders".into(), has_password: false, members: vec!["Alex".into()], ours: false },
-                GroupRow { id: 2, name: "Secret".into(), has_password: true, members: vec![], ours: false },
+                GroupRow { id: 1, name: "Builders".into(), has_password: false, members: vec!["Alex".into()], member_ids: vec![0xA], ours: false, kind: 0 },
+                GroupRow { id: 2, name: "Secret".into(), has_password: true, members: vec![], member_ids: vec![], ours: false, kind: 0 },
             ],
             ..View::default()
         }
@@ -265,6 +367,23 @@ pub(crate) mod testing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn list_screens_sit_where_simple_voice_chats_do() {
+        let tw = testing::tw;
+        let state = Screens::default();
+        let mut ui = Ui::new([320.0, 240.0], [0.0, 0.0], &tw, state.dragging());
+        let f = ui.list_frame("Join/Create Group", 32.0, false, 3.0);
+        // (240 - 16 - 32 - 64) / 18 = 7 units: 16 + 126 + 32 = 174 high.
+        assert_eq!((f.left, f.top, f.height), (44.0, 32.0, 174.0));
+        assert_eq!(f.rows, 3);
+        assert_eq!(f.entry(0), [52.0, 52.0, 216.0, 32.0]);
+        assert_eq!(f.entry(1)[1] - f.entry(0)[1], 36.0);
+        assert_eq!(f.footer_y(), 179.0);
+        // A tiny screen still has three units.
+        let mut ui = Ui::new([320.0, 120.0], [0.0, 0.0], &tw, state.dragging());
+        assert_eq!(ui.list_frame("x", 32.0, false, 3.0).height, 16.0 + 54.0 + 32.0);
+    }
 
     #[test]
     fn a_list_window_never_runs_past_its_end() {

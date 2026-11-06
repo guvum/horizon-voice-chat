@@ -90,37 +90,48 @@ pub fn place(camera: &Camera, size: [f32; 2], players: &[([f64; 3], String, bool
     placed.into_iter().map(|(_, l)| l).collect()
 }
 
-/// The speaker over a talking player's head: this far above the eyes (over
-/// the name tag, which spans about 0.68 to 0.9), higher still when the
-/// group name is shown there; and this big in the world, in blocks.
-pub const TALK_ABOVE_EYES: f64 = 1.1;
-pub const TALK_ABOVE_LABEL: f64 = 0.3;
-const TALK_SIZE: f64 = 0.35;
+/// Where vanilla draws a player's name tag: `EntityRenderer` puts the text's
+/// top this far above the eyes (the name tag attachment, 0.18 over the eyes
+/// of a standing player, plus 0.5), one text pixel being this many blocks.
+pub const NAME_TAG_ABOVE_EYES: f64 = 0.68;
+pub const NAME_TAG_UNIT: f64 = 0.025;
 
-/// The speaker icons for `talking` players (where the icon goes: eye
-/// position, and whether a group name is shown above them; whispering), as
-/// Simple Voice Chat shows one over each player who talks: centred over the
-/// head, as big as 0.35 blocks there (4 to 16 GUI pixels), the farthest
-/// first so the nearest draws on top.
-pub fn talk_icons(camera: &Camera, size: [f32; 2], talking: &[([f64; 3], bool, bool)]) -> Vec<crate::ui::Draw> {
-    use crate::skin::{Icon, icon};
-    let mut placed: Vec<(f64, crate::ui::Draw)> = talking
+/// The icon by one player's name tag: eye position, the name's width in
+/// text pixels, and the icon.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NameIcon {
+    pub eye: [f64; 3],
+    pub name_width: f32,
+    pub icon: crate::skin::Icon,
+}
+
+/// The icons right of `players`' name tags, where Simple Voice Chat draws
+/// them (`RenderEvents.renderIcon`): `width / 2 + 2` text pixels right of
+/// the tag's centre, 10 text pixels square, level with the name; sized from
+/// the projection, so they shrink with distance as the tag does. The
+/// farthest first, so the nearest draws on top.
+pub fn name_icons(camera: &Camera, size: [f32; 2], players: &[NameIcon]) -> Vec<crate::ui::Draw> {
+    let mut placed: Vec<(f64, crate::ui::Draw)> = players
         .iter()
-        .filter_map(|(eye, labelled, whisper)| {
-            let above = TALK_ABOVE_EYES + if *labelled { TALK_ABOVE_LABEL } else { 0.0 };
-            let point = [eye[0], eye[1] + above, eye[2]];
-            let d = sub(point, camera.pos);
+        .filter_map(|p| {
+            let anchor = [p.eye[0], p.eye[1] + NAME_TAG_ABOVE_EYES, p.eye[2]];
+            let d = sub(anchor, camera.pos);
             let distance = dot(d, d).sqrt();
             if distance > RANGE {
                 return None;
             }
-            let at = project(camera, point, size)?;
-            let top = project(camera, [point[0], point[1] + TALK_SIZE, point[2]], size)?;
-            let side = (at[1] - top[1]).abs().clamp(4.0, 16.0).round();
-            let half = side / 2.0;
-            let on_screen = (-half..=size[0] + half).contains(&at[0]) && (-half..=size[1] + half).contains(&at[1]);
-            let which = if *whisper { Icon::Whisper } else { Icon::Speaker };
-            on_screen.then(|| (distance, icon(which, [at[0] - half, at[1] - half, side, side])))
+            let at = project(camera, anchor, size)?;
+            let up = project(camera, [anchor[0], anchor[1] + NAME_TAG_UNIT, anchor[2]], size)?;
+            // GUI pixels per text pixel at that distance.
+            let s = (at[1] - up[1]).abs();
+            if s <= 0.0 {
+                return None;
+            }
+            let x = at[0] + ((p.name_width / 2.0).floor() + 2.0) * s;
+            let y = at[1] + 0.25 * s;
+            let side = 10.0 * s;
+            let on_screen = x + side >= 0.0 && x <= size[0] && y + side >= 0.0 && y <= size[1];
+            on_screen.then(|| (distance, crate::skin::icon(p.icon, [x, y, side, side])))
         })
         .collect();
     placed.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -133,32 +144,36 @@ mod tests {
     use crate::skin::Icon;
     use crate::ui::Draw;
 
+    fn one(d: &[Draw]) -> (String, [f32; 4]) {
+        match d {
+            [Draw::Sprite { name, dst, .. }] => (name.clone(), *dst),
+            other => panic!("{other:?}"),
+        }
+    }
+
     #[test]
-    fn a_speaker_over_whoever_talks_ahead() {
+    fn the_icon_sits_right_of_the_name_tag() {
         let camera = Camera { pos: [0.0, 65.62, 0.0], yaw: 0.0, pitch: 0.0, fov: 70.0 };
         let size = [400.0, 200.0];
-        let ahead = talk_icons(&camera, size, &[([0.0, 65.62, 5.0], false, false)]);
-        let near = match ahead.as_slice() {
-            [Draw::Sprite { name, dst, .. }] => {
-                assert_eq!(name, Icon::Speaker.sprite());
-                // Centred over the middle of the screen, above it.
-                assert!((dst[0] + dst[2] / 2.0 - 200.0).abs() < 0.01 && dst[1] + dst[3] / 2.0 < 100.0, "{dst:?}");
-                // 0.35 blocks at 5 blocks: about 10 px on a 200 px tall screen.
-                assert!((9.0..=11.0).contains(&dst[2]) && dst[2] == dst[3], "{dst:?}");
-                *dst
-            }
-            other => panic!("{other:?}"),
-        };
-        // Smaller farther away; higher with a group name under it.
-        let far = talk_icons(&camera, size, &[([0.0, 65.62, 20.0], false, false)]);
-        assert!(matches!(&far[..], [Draw::Sprite { dst, .. }] if dst[2] < near[2]));
-        let labelled = talk_icons(&camera, size, &[([0.0, 65.62, 5.0], true, false)]);
-        assert!(matches!(&labelled[..], [Draw::Sprite { dst, .. }] if dst[1] < near[1]));
-        assert!(talk_icons(&camera, size, &[([0.0, 65.62, -5.0], false, false)]).is_empty());
-        let whisper = talk_icons(&camera, size, &[([0.0, 65.62, 5.0], false, true)]);
-        assert!(matches!(&whisper[..], [Draw::Sprite { name, .. }] if name == Icon::Whisper.sprite()));
+        let at = |z: f64, w: f32, icon: Icon| NameIcon { eye: [0.0, 65.62, z], name_width: w, icon };
+        let (name, near) = one(&name_icons(&camera, size, &[at(5.0, 30.0, Icon::Speaker)]));
+        assert_eq!(name, Icon::Speaker.sprite());
+        // The tag's top, 0.68 above the eyes, 5 blocks ahead.
+        let top = project(&camera, [0.0, 65.62 + 0.68, 5.0], size).unwrap();
+        let s = top[1] - project(&camera, [0.0, 65.62 + 0.705, 5.0], size).unwrap()[1];
+        // 15 + 2 text pixels right of the middle, a quarter pixel down, 10 square.
+        assert!((near[0] - (200.0 + 17.0 * s)).abs() < 0.01, "{near:?}");
+        assert!((near[1] - (top[1] + 0.25 * s)).abs() < 0.01 && near[1] < 100.0, "{near:?}");
+        assert!((near[2] - 10.0 * s).abs() < 0.01 && near[2] == near[3], "{near:?}");
+        // A longer name pushes it right; farther away it shrinks.
+        let (_, wide) = one(&name_icons(&camera, size, &[at(5.0, 60.0, Icon::Speaker)]));
+        assert!(wide[0] > near[0] && wide[2] == near[2]);
+        let (_, far) = one(&name_icons(&camera, size, &[at(20.0, 30.0, Icon::Speaker)]));
+        assert!(far[2] < near[2]);
+        // Behind the camera or out of range: nothing.
+        assert!(name_icons(&camera, size, &[at(-5.0, 30.0, Icon::Speaker), at(80.0, 30.0, Icon::Speaker)]).is_empty());
         // The farther one first.
-        let two = talk_icons(&camera, size, &[([0.0, 65.62, 4.0], false, false), ([1.0, 65.62, 9.0], false, true)]);
+        let two = name_icons(&camera, size, &[at(4.0, 30.0, Icon::Speaker), at(9.0, 30.0, Icon::Whisper)]);
         assert!(matches!(&two[0], Draw::Sprite { name, .. } if name == Icon::Whisper.sprite()));
     }
 
